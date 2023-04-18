@@ -71,6 +71,92 @@ void loadData(unsigned char *from, unsigned char *to, int start, int size)
         to[i] = from[start + i];
     }
 }
+//
+string adjustPath(const string path, const string content)
+{
+    if (path[path.size() - 1] == '/')
+    {
+        return (content.size() == 0) ? path : path + content + "/";
+    }
+    else
+    {
+        return (content.size() == 0) ? path + "/" : path + "/" + content + "/";
+    }
+}
+string adjustoutput(const string path)
+{
+    vector<string> paths;
+    splitPath(path.c_str(), paths);
+    vector<string> ans;
+    string tmp = "/";
+    for (string p : paths)
+    {
+        if (p == ".")
+            continue;
+        if (p == "..")
+            if (ans.size() == 0)
+                continue;
+            else
+                ans.pop_back();
+        else
+            ans.push_back(p);
+    }
+    for (string a : ans)
+    {
+        tmp += a;
+        tmp += "/";
+    }
+    return tmp;
+}
+string adjustpoint(const string path)
+{
+    vector<string> paths;
+    splitPath(path.c_str(), paths);
+    vector<string> ans;
+    string tmp = "/";
+    for (string p : paths)
+    {
+        if (p == ".")
+            continue;
+        else
+            ans.push_back(p);
+    }
+    for (string a : ans)
+    {
+        tmp += a;
+        tmp += "/";
+    }
+    return tmp;
+}
+// 红色字体
+void print_red_start();
+void print_red_end();
+// 输出文件大小
+void print_int(int x)
+{
+    if (x == 0)
+        my_puts("0");
+    else
+    {
+        int x1 = x;
+        char tmp[1000];
+        int len = 0;
+        while (x)
+        {
+            len++;
+            x /= 10;
+        }
+        int c = len - 1;
+        *(tmp + len) = 0;
+        while (c >= 0)
+        {
+            tmp[c] = '0' + x1 % 10;
+            c--;
+            x1 /= 10;
+        }
+        my_puts(tmp);
+    }
+}
 
 // 读取文件系统
 class FAT12Reader
@@ -91,7 +177,6 @@ public:
     int getFileEntries(const char *path, vector<FileEntry *> *fileEntries);
     string readfile(const FileEntry *fileEntry);
     int readfat(int clusnum); // 已知当前簇号，去读取fat表中对应簇号的内容
-    void mytest();
 } fat12Reader("./b.img");
 
 FAT12Reader::FAT12Reader(const char *Path)
@@ -126,11 +211,6 @@ FAT12Reader::FAT12Reader(const char *Path)
         }
         fileEntry.push_back(fE);
     }
-    // cout << fileEntry.size() << endl;
-    // cout << getFilename(fileEntry[1]->DIR_Name) << endl;
-    // cout << fileEntry[1]->DIR_Attr << endl;
-    // cout << short2int(fileEntry[1]->DIR_FstClus) << endl;
-    // cout << fileEntry[1]->DIR_FstClus << endl;
 }
 
 int FAT12Reader::getFileEntries(const char *path, vector<FileEntry *> *fileEntries)
@@ -144,7 +224,10 @@ int FAT12Reader::getFileEntries(const char *path, vector<FileEntry *> *fileEntri
     splitPath(path, paths);
     // 根目录
     if (string(path) == "/")
+    {
         return DIR_FILE;
+    }
+
     // 根据名字寻找路径
     for (int i = 0; i < paths.size(); i++)
     {
@@ -160,23 +243,61 @@ int FAT12Reader::getFileEntries(const char *path, vector<FileEntry *> *fileEntri
         }
 
         fileEntries->clear();
-        if (entry == nullptr)
-            return 0; // 没找到出错了
-        else if (i + 1 == paths.size() && entry->DIR_Attr == NORMAL_FILE)
+        // 没找到出错了 对于根目录需要另外判断
+        if (entry == nullptr && paths[i] != "..")
+            return 0;
+        // ??
+        if (entry == nullptr && paths[i] == "..")
+        {
+            for (FileEntry *fe : fileEntry)
+                fileEntries->push_back(fe);
+            continue;
+        }
+
+        if (i + 1 == paths.size() && entry->DIR_Attr == NORMAL_FILE)
         {
             fileEntries->push_back(entry);
             return NORMAL_FILE; // 是最后一个且是普通文件
         }
-        else if (entry->DIR_Attr = DIR_FILE)
+        if (entry->DIR_Attr = DIR_FILE)
         {
-            // TODO: 文件夹目录
+            // TODO: 文件夹目录 遍历所有簇中，通过名字判断是否相同，如果文件夹比较大，那么他对应的fat项就不是FFF
+            int nextClus = short2int(entry->DIR_FstClus);
+            if (nextClus == 0)
+            {
+                // 回到根目录 !!!!!!
+                fileEntries->clear();
+                for (FileEntry *fe : fileEntry)
+                    fileEntries->push_back(fe);
+                continue;
+            }
+            unsigned char buf[BPB_BytesPerSec];
+            while (nextClus > 0)
+            {
+                loadData(data, buf, (DataStartSector + nextClus - 2) * BPB_BytesPerSec, BPB_BytesPerSec);
+                nextClus = readfat(nextClus);
+                for (unsigned int i = 0; i < BPB_BytesPerSec / sizeof(FileEntry); i++)
+                {
+                    FileEntry *entry = new FileEntry;
+                    memcpy(entry, buf + i * sizeof(FileEntry), sizeof(FileEntry));
+                    if (entry->DIR_Name[0] <= 0 ||
+                        (entry->DIR_Attr != NORMAL_FILE && entry->DIR_Attr != DIR_FILE))
+                    // if ((entry->DIR_Attr != NORMAL_FILE && entry->DIR_Attr != DIR_FILE))
+                    {
+                        delete entry;
+                        continue;
+                    }
+                    fileEntries->push_back(entry);
+                }
+            }
         }
         else
         {
+            // 通过返回值来判断出错类型
             return 0;
         }
     }
-    return 0;
+    return DIR_FILE;
 }
 
 string FAT12Reader::readfile(const FileEntry *fileEntry)
@@ -242,8 +363,100 @@ int FAT12Reader::readfat(int clusnum)
     return nextclusnum;
 }
 
-void FAT12Reader::mytest()
+// ls _ dfs
+void dfs(const char *path, bool islong)
 {
+    vector<FileEntry *> fileEntries;
+    vector<string> subDirPaths;
+    // 根据当前路径，找到fileentry
+    int CODE = fat12Reader.getFileEntries(path, &fileEntries);
+    // cout << "size:" << fileEntries.size() << endl;
+    // cout << getFilename(fileEntries[0]->DIR_Name) << endl;
+    if (CODE == NORMAL_FILE)
+        return;
+
+    // root
+    my_puts(adjustoutput((adjustPath(path, ""))).c_str());
+    if (islong)
+    {
+        int filenum = 0;
+        int dirnum = 0;
+        for (FileEntry *fe1 : fileEntries)
+        {
+            if ((fe1->DIR_Attr) == NORMAL_FILE)
+                filenum++;
+            if ((fe1->DIR_Attr) == DIR_FILE && fe1->DIR_Name[0] != '.')
+                dirnum++;
+        }
+        my_puts(" ");
+        print_int(dirnum);
+        my_puts(" ");
+        print_int(filenum);
+    }
+    my_puts(":\n");
+
+    for (int i = 0; i < fileEntries.size(); i++)
+    {
+        FileEntry *fe = fileEntries[i];
+        if (fe->DIR_Attr == DIR_FILE)
+        {
+            if (islong)
+            {
+                vector<FileEntry *> subFEs;
+                fat12Reader.getFileEntries(adjustPath(path, getFilename(fe->DIR_Name)).data(), &subFEs);
+                int filenum = 0;
+                int dirnum = 0;
+                for (FileEntry *fe1 : subFEs)
+                {
+                    if ((fe1->DIR_Attr) == NORMAL_FILE)
+                        filenum++;
+                    if ((fe1->DIR_Attr) == DIR_FILE && fe1->DIR_Name[0] != '.')
+                        dirnum++;
+                }
+                print_red_start();
+                my_puts((getFilename(fe->DIR_Name) + " ").c_str());
+                print_red_end();
+
+                if (fe->DIR_Name[0] != '.')
+                {
+                    print_int(dirnum);
+                    my_puts(" ");
+                    print_int(filenum);
+                    my_puts("\n");
+                }
+                else
+                    my_puts("\n");
+            }
+            else
+            {
+                print_red_start();
+                my_puts((getFilename(fe->DIR_Name) + "  ").c_str());
+                print_red_end();
+            }
+            if (fe->DIR_Name[0] != '.')
+            {
+                subDirPaths.push_back(adjustPath(path, getFilename(fe->DIR_Name)));
+            }
+        }
+        else if (fe->DIR_Attr == NORMAL_FILE)
+        {
+            if (islong)
+            {
+                my_puts((getFilename(fe->DIR_Name) + " ").c_str());
+                print_int(int2int(fe->DIR_FileSize));
+                my_puts("\n");
+            }
+            else
+                my_puts((getFilename(fe->DIR_Name) + "  ").c_str());
+        }
+    }
+
+    if (!islong)
+        my_puts("\n");
+
+    // print sub
+    for (string subPath : subDirPaths)
+        dfs(subPath.data(), islong);
 }
 
 int main()
@@ -251,6 +464,7 @@ int main()
     string cmd;
     string keyWord;
     bool isProper;
+    bool isLong; // ls -l
     vector<string> args;
 
     while (1)
@@ -260,6 +474,7 @@ int main()
             break;
         vector<string> command = split(cmd, ' ');
         isProper = true;
+        isLong = false;
         args.clear();
         keyWord = command[0];
         command.erase(command.begin());
@@ -268,7 +483,6 @@ int main()
             if (command.empty())
                 break;
             else
-                // cout << "exit do not have parameters" << endl;
                 my_puts("exit do not have parameters\n");
         }
         else if (keyWord == "cat")
@@ -300,11 +514,11 @@ int main()
             // step two: 输出
             vector<FileEntry *> fileEntries_cat;
             int type = fat12Reader.getFileEntries(args[0].data(), &fileEntries_cat);
-            // cout << args[0] << endl;
             // cout << fileEntries_cat.size() << endl;
+            // cout << getFilename(fileEntries_cat[0]->DIR_Name) << endl;
             // cout << type << endl;
             if (type != 32)
-                my_puts("this file type is not supported by \'cat\'");
+                my_puts("this file type is not supported by \'cat\' \n");
             else
             {
                 string content = fat12Reader.readfile(fileEntries_cat[0]);
@@ -332,6 +546,7 @@ int main()
                             break;
                         }
                     }
+                    isLong = true;
                 }
                 else if (i[0] == '/')
                 {
@@ -349,13 +564,32 @@ int main()
                 }
                 else
                 {
-                    my_puts("path should start with \'\\' \n");
+                    my_puts("path should start with \'/\' \n");
                     isProper = false;
                     break;
                 }
             }
             if (!isProper)
                 continue;
+
+            string path = args.size() > 0 ? args[0] : "/";
+            path = adjustpoint(path);
+            vector<FileEntry *> fileEntries_ls;
+            int type = fat12Reader.getFileEntries(path.data(), &fileEntries_ls);
+            // cout << "size:" << fileEntries_ls.size() << endl;
+            if (type == NORMAL_FILE)
+            {
+                my_puts("ls can only be applied to directory.\n");
+            }
+            else if (type == DIR_FILE)
+            {
+                // cout << path.data() << endl;
+                dfs(path.data(), isLong);
+            }
+            else
+            {
+                my_puts("not found or supported command\n");
+            }
         }
         else
         {
@@ -419,4 +653,13 @@ void splitPath(const char *const path, vector<string> &paths)
     for (string seg : segs)
         if (seg.size() > 0)
             paths.push_back(seg);
+}
+
+void print_red_start()
+{
+    my_puts("\033[31m");
+}
+void print_red_end()
+{
+    my_puts("\033[0m");
 }
